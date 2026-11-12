@@ -29,3 +29,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal
 ureq = "2"
 clap = { version = "4", features = ["derive", "env"] }
 tempfile = "3"
+minisign-verify = "0.3"
+minisign = "0.7"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "9", default-features = false, features = ["deflate"] }
+weirdnet-mcp = "0.1"

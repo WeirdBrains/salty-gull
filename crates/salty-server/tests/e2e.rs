@@ -52,9 +52,7 @@ fn publish_then_device_updates() {
     let root = saltyctl::make_root(&spec, &[saltyctl::read_key(&root_key).unwrap()], now).unwrap();
     let pin = RootPin::from_hex(&saltyctl::root_pin(&root).unwrap()).unwrap();
 
-    std::fs::create_dir_all(build.path().join("bin")).unwrap();
-    std::fs::write(build.path().join("bin/morph"), b"morph 1.1.0").unwrap();
-    std::fs::write(build.path().join("README"), b"hello").unwrap();
+    std::fs::write(build.path().join("morph"), b"morph 1.1.0").unwrap();
     let mspec = saltyctl::ManifestSpec {
         app: "morph".into(),
         channel: "stable".into(),
@@ -62,7 +60,7 @@ fn publish_then_device_updates() {
         version: semver::Version::new(1, 1, 0),
         platform: "linux".into(),
         arch: "x86-64".into(),
-        format: "tar-gz".into(),
+        format: "exe".into(),
         signing_identity: "minisign-RWQ-test".into(),
         notes: "Faster startup.".into(),
         expires_days: 30,
@@ -90,6 +88,8 @@ fn publish_then_device_updates() {
         client_version: semver::Version::new(1, 0, 0),
         base_release: None,
         policy: Policy { flavor: Flavor::Desktop, dart_patches: false },
+        signing_identity: Some("minisign-RWQ-test".into()),
+        minisign_key: None,
     };
     let mut u = Updater::open(cfg, HttpTransport::new(&url)).unwrap();
     let device = Device::new([3; 32], now);
@@ -97,8 +97,9 @@ fn publish_then_device_updates() {
     assert_eq!(manifest.notes, "Faster startup.");
     assert!(matches!(decision, Decision::Ask { .. }));
     u.accept("morph-stable-1", now).unwrap();
-    let dir = u.download("morph-stable-1").unwrap();
-    assert_eq!(std::fs::read(dir.join("bin/morph")).unwrap(), b"morph 1.1.0");
+    u.download("morph-stable-1").unwrap();
+    let salty_client::Plan::Swap { dir } = u.install_plan("morph-stable-1").unwrap() else { panic!("exe swaps") };
+    assert_eq!(std::fs::read(dir.join("morph")).unwrap(), b"morph 1.1.0");
     assert_eq!(u.begin_boot().unwrap(), Some(dir));
     assert_eq!(u.mark_ready().unwrap().as_deref(), Some("morph-stable-1"));
 }

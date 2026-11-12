@@ -15,8 +15,10 @@
 //! prompt) take the staged directory from here; they are separate from this crate.
 #![forbid(unsafe_code)]
 
+pub mod install;
 mod transport;
 
+pub use install::Plan;
 pub use transport::{HttpTransport, Transport};
 
 use semver::Version;
@@ -74,6 +76,11 @@ pub struct Config {
     pub base_release: Option<String>,
     /// Distribution flavor and options.
     pub policy: Policy,
+    /// The platform signing identity of the running build; full updates must keep it.
+    pub signing_identity: Option<String>,
+    /// The publisher's minisign public key (base64); when set, full packages must carry a
+    /// valid `.minisig`.
+    pub minisign_key: Option<String>,
 }
 
 /// The result of a check.
@@ -139,6 +146,7 @@ impl<T: Transport> Updater<T> {
     /// Opens the updater, loading saved state from `cfg.dir`.
     pub fn open(cfg: Config, transport: T) -> Result<Self> {
         fs::create_dir_all(cfg.dir.join("updates"))?;
+        fs::create_dir_all(cfg.dir.join("versions"))?;
         let local = match fs::read(cfg.dir.join("local.json")) {
             Ok(b) => serde_json::from_slice(&b).map_err(|e| Error::State(e.to_string()))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Local::default(),
@@ -193,25 +201,43 @@ impl<T: Transport> Updater<T> {
         let verified = client.verify(&self.cfg.app, &self.cfg.channel, &rest, &opts)?;
         let result = self.offer(verified, device);
         self.save()?;
-        Ok(result)
+        result
     }
 
-    fn offer(&mut self, v: VerifiedUpdate, device: &Device) -> Check {
+    fn offer(&mut self, v: VerifiedUpdate, device: &Device) -> Result<Check> {
         let m = &v.manifest;
+        if let (Some(p), Some(want)) = (install::full(m), &self.cfg.signing_identity)
+            && &p.signing_identity != want
+        {
+            return Err(Error::Invalid(format!("{}: signing identity changed ({} → {})", m.update_id, want, p.signing_identity)));
+        }
         let current = match &m.kind {
             UpdateKind::Full(_) => m.version <= self.cfg.client_version,
             _ => false,
         };
         if current || self.committed_id() == Some(m.update_id.as_str()) {
-            return Check::UpToDate;
+            return Ok(Check::UpToDate);
         }
         match v.applies(device) {
             Applicability::Applies => {}
-            other => return Check::NotForThisDevice(other),
+            other => return Ok(Check::NotForThisDevice(other)),
         }
-        let decision = decide(&self.cfg.policy, &self.local.consent, m, &self.local.granted);
+        let mut decision = decide(&self.cfg.policy, &self.local.consent, m, &self.local.granted);
+        if Self::notify_only(m) && !matches!(decision, Decision::Skip(_)) {
+            decision = Decision::Notify { security: m.labels.security.is_some() };
+        }
         self.local.pending = Some(Pending { manifest: m.clone(), manifest_hash: v.manifest_hash });
-        Check::Offer { manifest: Box::new(m.clone()), decision }
+        Ok(Check::Offer { manifest: Box::new(m.clone()), decision })
+    }
+
+    fn notify_only(m: &UpdateManifest) -> bool {
+        install::full(m).is_some_and(|p| p.format.install_mode() == weirdnet_update::manifest::InstallMode::NotifyOnly)
+    }
+
+    /// The text to show for an update in a notify-only format (TAUR, Nix, Homebrew, winget).
+    pub fn notice(&self, update_id: &str) -> Result<Option<String>> {
+        let m = &self.pending(update_id)?.manifest;
+        Ok(install::full(m).and_then(|p| install::notice(m, p)))
     }
 
     fn committed_id(&self) -> Option<&str> {
@@ -249,6 +275,9 @@ impl<T: Transport> Updater<T> {
     /// or an accepted prompt. Returns the staged directory.
     pub fn download(&mut self, update_id: &str) -> Result<PathBuf> {
         let p = self.pending(update_id)?.clone();
+        if Self::notify_only(&p.manifest) {
+            return Err(Error::Invalid(format!("{update_id} is installed by the package manager; show the notice instead")));
+        }
         let decision = decide(&self.cfg.policy, &self.local.consent, &p.manifest, &self.local.granted);
         if decision != Decision::Install {
             return Err(Error::Invalid(format!("{update_id} needs the user's consent first")));
@@ -283,10 +312,34 @@ impl<T: Transport> Updater<T> {
         if done.exists() {
             fs::remove_dir_all(&done)?;
         }
+        if let (Some(_), Some(key)) = (install::full(&p.manifest), &self.cfg.minisign_key) {
+            install::verify_minisign(&part, install::package_file(&p.manifest)?, key)?;
+        }
         fs::rename(&part, &done)?;
-        self.local.health.stage(update_id);
+        if install::full(&p.manifest).is_none() {
+            // Assets and Wasm load from the staged directory on the next start.
+            self.local.health.stage(update_id);
+        }
         self.save()?;
         Ok(done)
+    }
+
+    /// For a downloaded full update: how to install it. Swap formats are unpacked into a
+    /// versioned directory and staged for a trial boot; installer and package-manager formats
+    /// return the command to run once the user confirms it.
+    pub fn install_plan(&mut self, update_id: &str) -> Result<Plan> {
+        let p = self.pending(update_id)?.clone();
+        let full = install::full(&p.manifest).ok_or_else(|| Error::Invalid(format!("{update_id} is not a full update")))?;
+        let staged = self.cfg.dir.join("updates").join(update_id);
+        if !staged.is_dir() {
+            return Err(Error::Invalid(format!("{update_id} is not downloaded")));
+        }
+        let plan = install::plan(&p.manifest, full, &staged, &self.cfg.dir.join("versions"))?;
+        if matches!(plan, Plan::Swap { .. }) {
+            self.local.health.stage(update_id);
+            self.save()?;
+        }
+        Ok(plan)
     }
 
     /// Call first on every start. Returns which build to run: the staged candidate's directory,
@@ -294,14 +347,18 @@ impl<T: Transport> Updater<T> {
     pub fn begin_boot(&mut self) -> Result<Option<PathBuf>> {
         let choice = self.local.health.begin_boot();
         let out = match choice {
-            BootChoice::Candidate(id) => Some(self.cfg.dir.join("updates").join(id)),
+            BootChoice::Candidate(id) => {
+                let v = self.cfg.dir.join("versions").join(&id);
+                Some(if v.is_dir() { v } else { self.cfg.dir.join("updates").join(id) })
+            }
             BootChoice::RollBack(id) => {
                 if let Some(c) = self.client.as_mut() {
                     c.mark_bad(&id);
                 }
-                let dir = self.cfg.dir.join("updates").join(&id);
-                if dir.exists() {
-                    fs::remove_dir_all(dir)?;
+                for dir in [self.cfg.dir.join("updates").join(&id), self.cfg.dir.join("versions").join(&id)] {
+                    if dir.exists() {
+                        fs::remove_dir_all(dir)?;
+                    }
                 }
                 self.local.pending = None;
                 None

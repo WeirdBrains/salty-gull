@@ -16,7 +16,12 @@ serde_json.workspace = true
 thiserror.workspace = true
 semver.workspace = true
 ureq.workspace = true
+minisign-verify.workspace = true
+flate2.workspace = true
+tar.workspace = true
+zip.workspace = true
 
 [dev-dependencies]
 salty-core = { workspace = true, features = ["testkit"] }
 tempfile.workspace = true
+minisign.workspace = true
