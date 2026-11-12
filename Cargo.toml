@@ -15,8 +15,7 @@ publish = false
 salty-core = { path = "crates/salty-core" }
 salty-client = { path = "crates/salty-client" }
 saltyctl = { path = "crates/saltyctl" }
-# Tracking Weirdnet main during development; releases pin crates.io versions (weirdnet-agents AGENTS.md).
-weirdnet-update = { git = "https://github.com/WeirdBrains/weirdnet-update", branch = "main" }
+weirdnet-update = "0.1"
 weirdnet-accounts = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

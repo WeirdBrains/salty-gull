@@ -17,3 +17,7 @@ This file adds the Salty Gull rules.
 - Before every commit: `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features
   -- -D warnings`, `cargo test --workspace`.
 - Don't deploy anything live or buy infrastructure without Michael's approval.
+- Licence: BSD-3-Clause (Michael, 2026-11-12). The repo is public (`WeirdBrains/salty-gull`).
+- On Linux, GUI and screenshot tests (Flutter plugin, consent UI) run in a headless compositor
+  (`weston --backend=headless`, `cage`) or `xvfb-run`, never on Michael's live desktop.
+- Don't release Salty Gull, deploy anything live, buy infrastructure, or change Morph's `main` without asking.

@@ -56,4 +56,4 @@ packages, deb/rpm through the system's approved privilege prompt, notify-only fo
 
 ## Licence
 
-Pending Michael's decision (BSD-3-Clause proposed, matching Weirdnet).
+BSD-3-Clause (see [LICENSE](LICENSE)).

@@ -1558,7 +1558,8 @@ dependencies = [
 [[package]]
 name = "weirdnet-update"
 version = "0.1.0"
-source = "git+https://github.com/WeirdBrains/weirdnet-update?branch=main#fad05a448f007cffc1f9a560420d72a907215138"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c75e531e05d86379ab2b029f4df5b986dc771cc9c4ae7614fe234efd40cbee5c"
 dependencies = [
  "blake3",
  "ciborium",
