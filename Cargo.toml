@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/salty-core", "crates/salty-server", "crates/saltyctl", "crates/salty-client"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+authors = ["Michael Christenson II <m3talsmith@gmail.com>"]
+license = "BSD-3-Clause"
+repository = "https://github.com/WeirdBrains/salty-gull"
+publish = false
+
+[workspace.dependencies]
+salty-core = { path = "crates/salty-core" }
+salty-client = { path = "crates/salty-client" }
+saltyctl = { path = "crates/saltyctl" }
+# Tracking Weirdnet main during development; releases pin crates.io versions (weirdnet-agents AGENTS.md).
+weirdnet-update = { git = "https://github.com/WeirdBrains/weirdnet-update", branch = "main" }
+weirdnet-accounts = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+hex = "0.4"
+zeroize = "1"
+semver = "1"
+rusqlite = { version = "0.37", features = ["bundled"] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs"] }
+ureq = "2"
+clap = { version = "4", features = ["derive", "env"] }
+tempfile = "3"
