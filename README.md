@@ -12,9 +12,9 @@ Gull-specific code is here.
 | Crate | What |
 |---|---|
 | `salty-core` | Store: verified roots and manifests (SQLite), BLAKE3-addressed blobs, device bundles |
-| `salty-server` | HTTP server (axum): public reads, admin-token publishing |
-| `saltyctl` | Keys, roots, root pins, manifests, publishing |
-| `salty-client` | Device updater: check, verify, consent, download, stage, trial boot, rollback |
+| `salty-server` | HTTP server (axum): public reads, admin-token publishing, read-only MCP at `/mcp` |
+| `saltyctl` | Keys, roots, root pins, manifests, publishing, `saltyctl mcp` (stdio bridge) |
+| `salty-client` | Device updater: check, verify, consent, download, install, trial boot, rollback |
 
 ## Try it (temp dirs)
 
@@ -42,17 +42,43 @@ saltyctl publish m.cbor --dir build --server http://127.0.0.1:8470
 | PUT | `/v1/blobs/{blake3}` | admin bearer token |
 | POST | `/v1/roots` | admin bearer token |
 | POST | `/v1/manifests` | admin bearer token |
+| POST | `/mcp` | admin bearer token (read-only tools) |
 
 The server checks every root (first: its own threshold; rotations: old and new thresholds), every blob hash and
 every manifest (delegated release keys, validity, expiry, rising seq, files present) before storing it. Org
 root and release keys never leave the publisher.
 
+## Installs
+
+| Format | How |
+|---|---|
+| tar.gz, zip, `.app` | Unpacked (regular files and directories only, no `..`) into `versions/<id>`, then a trial boot with rollback |
+| exe | Copied into `versions/<id>` and made executable; trial boot |
+| msi | `msiexec /i … MSIINSTALLPERUSER=1 ALLUSERS=2` (per user, no admin) |
+| dmg | Opened for the user with `open` |
+| deb, rpm | `pkexec apt-get install` / `pkexec dnf install`: the system asks for the password |
+| FreeBSD, OpenBSD packages | `doas pkg add` / `doas pkg_add` |
+| pkg.tar.zst, nix, brew, winget | Notify only: shows the upgrade command, never downloads |
+
+Salty Gull never raises privileges itself. When an app sets a minisign publisher key, every package needs a
+`.minisig` from that key, and the manifest's signing identity must match the running build.
+
+## MCP
+
+`saltyctl mcp --server URL` (token in `SALTY_TOKEN`) bridges stdio to the server's `/mcp`. Tools:
+`list_channels`, `channel_history`, `root_info`. They are read-only, because agents never hold signing keys.
+
+## BSD builds
+
+`scripts/cross-bsd.sh SYSROOT_DIR [freebsd|openbsd|all]` cross-builds from Linux with clang and lld against
+checksum-verified FreeBSD 14.5 and OpenBSD 8.0 sysroots. OpenBSD is a tier-3 Rust target, so it uses nightly
+with `-Zbuild-std`. The binaries are built but not yet run on real BSD machines.
+
 ## Status
 
-Done: the verified store, server, CLI and desktop updater core with end-to-end tests. Next for G3: platform
-installers (app-directory swap for tar.gz/zip, per-user exe/MSI, `.app`), minisign verification of desktop
-packages, deb/rpm through the system's approved privilege prompt, notify-only for pkg.tar.zst/nix/brew/winget,
-`saltyctl mcp`, Morph desktop integration and FreeBSD/OpenBSD builds.
+Done: the verified store, server, CLI, desktop updater with platform installers, minisign checks, MCP and
+BSD cross-builds, with end-to-end tests. Next: the Flutter plugin, headless GUI tests, Morph integration
+(see [docs/morph.md](docs/morph.md)) and running the BSD builds on real machines.
 
 ## Licence
 

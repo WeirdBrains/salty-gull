@@ -1276,7 +1276,6 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "hex",
- "salty-core",
  "semver",
  "serde",
  "serde_json",
