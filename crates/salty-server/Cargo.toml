@@ -12,6 +12,7 @@ publish.workspace = true
 salty-core.workspace = true
 weirdnet-update.workspace = true
 weirdnet-accounts.workspace = true
+weirdnet-mcp.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 axum.workspace = true
@@ -22,6 +23,7 @@ clap.workspace = true
 saltyctl.workspace = true
 salty-client.workspace = true
 semver.workspace = true
+serde_json.workspace = true
 salty-core = { workspace = true, features = ["testkit"] }
 tempfile.workspace = true
 ureq.workspace = true

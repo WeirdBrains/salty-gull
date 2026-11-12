@@ -79,6 +79,11 @@ enum Cmd {
         #[arg(long, env = "SALTY_SERVER")]
         server: String,
     },
+    /// MCP over stdio, forwarded to the server's `/mcp` (uses SALTY_TOKEN when set).
+    Mcp {
+        #[arg(long, env = "SALTY_SERVER")]
+        server: String,
+    },
     /// Upload a manifest's files, then the manifest.
     Publish {
         manifest: PathBuf,
@@ -130,6 +135,7 @@ fn run(cli: Cli) -> saltyctl::Result<()> {
             let r = saltyctl::Server::new(&server, token()?).publish_root(&saltyctl::read_envelope(&root)?)?;
             println!("{r}");
         }
+        Cmd::Mcp { server } => saltyctl::mcp_stdio(&server, std::env::var("SALTY_TOKEN").ok().as_deref())?,
         Cmd::Publish { manifest, dir, server } => {
             let r = saltyctl::Server::new(&server, token()?).publish_manifest(&saltyctl::read_envelope(&manifest)?, &dir)?;
             println!("{r}");

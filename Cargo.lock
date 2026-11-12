@@ -1266,6 +1266,7 @@ dependencies = [
  "tokio",
  "ureq",
  "weirdnet-accounts",
+ "weirdnet-mcp",
  "weirdnet-update",
 ]
 
@@ -1282,6 +1283,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "ureq",
+ "weirdnet-mcp",
  "weirdnet-update",
  "zeroize",
 ]
@@ -1808,6 +1810,15 @@ dependencies = [
  "sha2",
  "subtle",
  "thiserror",
+]
+
+[[package]]
+name = "weirdnet-mcp"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ae214dcfb3d659540dcfbf47f3c324571c300b6f3788a84a61a6314c67252b5"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

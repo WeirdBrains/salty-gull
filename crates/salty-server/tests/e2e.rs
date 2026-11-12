@@ -102,4 +102,23 @@ fn publish_then_device_updates() {
     assert_eq!(std::fs::read(dir.join("morph")).unwrap(), b"morph 1.1.0");
     assert_eq!(u.begin_boot().unwrap(), Some(dir));
     assert_eq!(u.mark_ready().unwrap().as_deref(), Some("morph-stable-1"));
+
+    // MCP over HTTP through the saltyctl forwarder.
+    let agent = ureq::AgentBuilder::new().build();
+    let list = saltyctl::mcp_forward(&agent, &url, None, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).unwrap().unwrap();
+    let names: Vec<String> = serde_json::from_str::<serde_json::Value>(&list).unwrap()["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(names, ["list_channels", "channel_history", "root_info"]);
+    let call = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"channel_history","arguments":{"app":"morph","channel":"stable"}}}"#;
+    let v: serde_json::Value = serde_json::from_str(&saltyctl::mcp_forward(&agent, &url, None, call).unwrap().unwrap()).unwrap();
+    assert_eq!(v["result"]["structuredContent"]["updates"][0]["update_id"], "morph-stable-1");
+    assert_eq!(v["result"]["isError"], false);
+    let missing = r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"channel_history","arguments":{}}}"#;
+    let v: serde_json::Value = serde_json::from_str(&saltyctl::mcp_forward(&agent, &url, None, missing).unwrap().unwrap()).unwrap();
+    assert_eq!(v["result"]["isError"], true);
+    assert!(saltyctl::mcp_forward(&agent, &url, None, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#).unwrap().is_none());
 }

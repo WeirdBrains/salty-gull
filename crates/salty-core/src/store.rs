@@ -210,6 +210,26 @@ impl Store {
         b.map(|b| Ok(Signed::from_bytes(&b)?)).transpose()
     }
 
+    /// Every manifest for a channel, newest first.
+    pub fn history(&self, app: &str, channel: &str) -> Result<Vec<UpdateManifest>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT envelope FROM manifests WHERE app = ?1 AND channel = ?2 ORDER BY seq DESC")?;
+        let rows = st.query_map(params![app, channel], |r| r.get::<_, Vec<u8>>(0))?;
+        let mut out = Vec::new();
+        for b in rows {
+            out.push(Signed::from_bytes(&b?)?.decode()?);
+        }
+        Ok(out)
+    }
+
+    /// Every (app, channel) with its latest seq, sorted.
+    pub fn channels(&self) -> Result<Vec<(String, String, u64)>> {
+        let db = self.db();
+        let mut st = db.prepare("SELECT app, channel, MAX(seq) FROM manifests GROUP BY app, channel ORDER BY app, channel")?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get::<_, i64>(2)? as u64)))?;
+        Ok(rows.collect::<std::result::Result<_, _>>()?)
+    }
+
     /// What a device fetches: the root chain and the latest manifest.
     pub fn bundle(&self, app: &str, channel: &str) -> Result<UpdateBundle> {
         Ok(UpdateBundle { roots: self.roots()?, manifest: self.latest(app, channel)?, freshness: None })

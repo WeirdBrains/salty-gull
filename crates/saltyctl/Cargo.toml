@@ -19,6 +19,7 @@ hex.workspace = true
 zeroize.workspace = true
 ureq.workspace = true
 clap.workspace = true
+weirdnet-mcp.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

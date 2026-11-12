@@ -262,3 +262,24 @@ impl Server {
         self.post("/v1/manifests", &env.to_bytes()?)
     }
 }
+
+/// Forwards one MCP message to `<server>/mcp`; `None` when the server sends no reply.
+pub fn mcp_forward(agent: &ureq::Agent, server: &str, token: Option<&str>, line: &str) -> Result<Option<String>> {
+    let mut req = agent.post(&format!("{}/mcp", server.trim_end_matches('/'))).set("Content-Type", "application/json");
+    if let Some(t) = token {
+        req = req.set("Authorization", &format!("Bearer {t}"));
+    }
+    let r = req.send_string(line).map_err(server_err)?;
+    if r.status() == 202 {
+        return Ok(None);
+    }
+    let body = r.into_string()?;
+    Ok((!body.trim().is_empty()).then_some(body))
+}
+
+/// The `saltyctl mcp` loop: stdio JSON-RPC lines forwarded to the server.
+pub fn mcp_stdio(server: &str, token: Option<&str>) -> Result<()> {
+    let agent = ureq::AgentBuilder::new().build();
+    weirdnet_mcp::stdio::bridge(std::io::stdin().lock(), std::io::stdout(), |line| mcp_forward(&agent, server, token, line))?;
+    Ok(())
+}

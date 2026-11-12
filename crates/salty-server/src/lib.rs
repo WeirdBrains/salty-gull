@@ -12,7 +12,10 @@
 //! | PUT | `/v1/blobs/{blake3}` | yes | upload a blob (hash checked) |
 //! | POST | `/v1/roots` | yes | publish a root (CBOR envelope body) |
 //! | POST | `/v1/manifests` | yes | publish a manifest (CBOR envelope body) |
+//! | POST | `/mcp` | no (read-only tools) | MCP JSON-RPC (see [`mcp`]) |
 #![forbid(unsafe_code)]
+
+pub mod mcp;
 
 use axum::Router;
 use axum::body::Bytes;
@@ -48,6 +51,7 @@ pub fn router(app: Shared) -> Router {
         .route("/v1/blobs/{hash}", get(get_blob))
         .route("/v1/blobs/{hash}", put(put_blob).layer(DefaultBodyLimit::max(MAX_BLOB_BYTES)))
         .route("/v1/manifests", post(publish_manifest))
+        .route("/mcp", post(mcp_post))
         .with_state(app)
 }
 
@@ -131,6 +135,16 @@ async fn publish_manifest(State(app): State<Shared>, headers: HeaderMap, body: B
     authorize(&app, &headers)?;
     let env = parse_env(&body)?;
     Ok(axum::Json(blocking(move || app.store.publish_manifest(&env, Timestamp::now())).await?))
+}
+
+async fn mcp_post(State(app): State<Shared>, headers: HeaderMap, axum::Json(msg): axum::Json<serde_json::Value>) -> Response {
+    let token = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(str::to_owned);
+    let out = tokio::task::spawn_blocking(move || mcp::handle(&app.store, token.as_deref(), msg)).await;
+    match out {
+        Ok(Some(v)) => axum::Json(v).into_response(),
+        Ok(None) => StatusCode::ACCEPTED.into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
 }
 
 /// Path of the admin token hash inside a server home.
