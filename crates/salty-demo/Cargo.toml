@@ -1,0 +1,18 @@
+[package]
+name = "salty-demo"
+description = "A tiny app that updates itself with salty-client; used by the VM and installer tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+salty-client.workspace = true
+salty-launch.workspace = true
+weirdnet-update.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+semver.workspace = true

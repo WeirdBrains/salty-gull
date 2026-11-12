@@ -1,12 +1,15 @@
 [package]
 name = "salty-client"
+description = "Salty Gull device updater: verified, consented desktop updates with installers, trial boots and rollback."
+keywords = ["update", "ota", "updater", "rollback", "signing"]
+categories = ["os"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+publish = true
 
 [dependencies]
 salty-core.workspace = true
@@ -22,6 +25,6 @@ tar.workspace = true
 zip.workspace = true
 
 [dev-dependencies]
-salty-core = { workspace = true, features = ["testkit"] }
+salty-core = { workspace = true, features = ["store", "testkit"] }
 tempfile.workspace = true
 minisign.workspace = true

@@ -1,0 +1,43 @@
+# Salty Gull release config for weirdnet-project-helpers (scripts/weirdnet_release.py).
+# Usage: python3 scripts/weirdnet_release.py [--patch|--major|--version X.Y.Z] [--dry-run]
+# Notes come from CHANGELOG.md `## [Unreleased]`; a message is optional.
+# Only salty-core and salty-client go to crates.io; the server, CLI, launcher and demo stay unpublished.
+helpers = "0.1.1"
+project = "salty-gull"
+next = [
+  "docs.rs builds https://docs.rs/salty-client/{version} and https://docs.rs/salty-core/{version}",
+  "binaries (saltyctl, salty-server, salty-launch) are not published; build them from the tag",
+]
+
+[env]
+CARGO_TARGET_DIR = "/mnt/ext1/scratch/salty-gull/cargo-target"
+
+[[files]]
+kind = "cargo-workspace"
+path = "Cargo.toml"
+primary = true
+
+[[files]]
+kind = "regex"
+path = "Cargo.toml"
+pattern = '^(salty-(?:core|client) = \{ path = "[^"]+", version = "){old}(")'
+replace = '\g<1>{version}\g<2>'
+count = 2
+
+[[files]]
+kind = "cargo-lock"
+path = "Cargo.lock"
+
+[changelog]
+path = "CHANGELOG.md"
+
+[checks]
+commands = [
+  "cargo fmt --all -- --check",
+  "cargo clippy --locked --workspace --all-targets --all-features -- -D warnings",
+  "cargo test --locked --workspace --all-features",
+  "RUSTDOCFLAGS='-D warnings' cargo doc --no-deps -p salty-core -p salty-client --all-features",
+]
+
+[crates]
+publish = ["crates/salty-core", "crates/salty-client"]

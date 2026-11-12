@@ -90,6 +90,7 @@ fn publish_then_device_updates() {
         policy: Policy { flavor: Flavor::Desktop, dart_patches: false },
         signing_identity: Some("minisign-RWQ-test".into()),
         minisign_key: None,
+        target: None,
     };
     let mut u = Updater::open(cfg, HttpTransport::new(&url)).unwrap();
     let device = Device::new([3; 32], now);
@@ -100,7 +101,7 @@ fn publish_then_device_updates() {
     u.download("morph-stable-1").unwrap();
     let salty_client::Plan::Swap { dir } = u.install_plan("morph-stable-1").unwrap() else { panic!("exe swaps") };
     assert_eq!(std::fs::read(dir.join("morph")).unwrap(), b"morph 1.1.0");
-    assert_eq!(u.begin_boot().unwrap(), Some(dir));
+    assert_eq!(u.begin_boot().unwrap().dir, Some(dir));
     assert_eq!(u.mark_ready().unwrap().as_deref(), Some("morph-stable-1"));
 
     // MCP over HTTP through the saltyctl forwarder.

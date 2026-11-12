@@ -7,18 +7,19 @@
 //!    rollout on the device, and applies the user's consent policy. Updates are never forced.
 //! 2. [`Updater::accept`] / [`Updater::decline`] record the user's answer to a prompt.
 //! 3. [`Updater::download`] fetches each file, checks size and BLAKE3, and stages the update.
-//! 4. On the next start the app calls [`Updater::begin_boot`] and runs the staged build when
-//!    told to; after its first frame and its own ready signal it calls [`Updater::mark_ready`].
-//!    Two failed trial boots roll back automatically and the update is refused from then on.
-//!
-//! Platform installers (swapping an app directory, MSI, `.app`, deb/rpm through the system
-//! prompt) take the staged directory from here; they are separate from this crate.
+//! 4. [`Updater::install_plan`] unpacks swap formats into `versions/<id>` or returns the
+//!    installer command (MSI, dmg, deb/rpm through the system prompt) for the app to run after
+//!    the user confirms; then the app calls [`Updater::installed`].
+//! 5. On the next start the app (or the `salty-launch` launcher, through [`begin_boot`]) gets a
+//!    [`Boot`]: which build to run, and whether it is on trial. After its first frame and its own
+//!    ready signal the app calls [`Updater::mark_ready`]. Two failed trial boots roll back to the
+//!    previous good build automatically and the update is refused from then on.
 #![forbid(unsafe_code)]
 
 pub mod install;
 mod transport;
 
-pub use install::Plan;
+pub use install::{Command, Plan};
 pub use transport::{HttpTransport, Transport};
 
 use semver::Version;
@@ -28,6 +29,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use weirdnet_update::health::{BootChoice, BootHealth};
+use weirdnet_update::manifest::{Arch, InstallMode, PackageFormat, Platform};
 use weirdnet_update::policy::{ConsentLog, Decision, decide};
 use weirdnet_update::target::Device;
 use weirdnet_update::verify::Applicability;
@@ -81,6 +83,35 @@ pub struct Config {
     /// The publisher's minisign public key (base64); when set, full packages must carry a
     /// valid `.minisig`.
     pub minisign_key: Option<String>,
+    /// What this build is (platform, CPU, package format). Full updates for anything else are
+    /// refused, so one channel can't hand a Linux archive to a Windows install.
+    pub target: Option<Target>,
+}
+
+/// The platform, CPU and package format of the running build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Target {
+    /// OS.
+    pub platform: Platform,
+    /// CPU.
+    pub arch: Arch,
+    /// How this build was installed.
+    pub format: PackageFormat,
+}
+
+/// What to run at this start; from [`Updater::begin_boot`] or [`begin_boot`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Boot {
+    /// The directory to run or load from: a swapped-in build (`versions/<id>`) or staged assets
+    /// (`updates/<id>`). `None` means the installed build.
+    pub dir: Option<PathBuf>,
+    /// The update on trial at this start. Call [`Updater::mark_ready`] once the app is healthy.
+    pub trial: Option<String>,
+    /// The update that just failed its trial and was rolled back.
+    pub rolled_back: Option<String>,
+    /// After a rollback of an installer format (MSI): the command that reinstalls the previous
+    /// good package. Run it, then start again. `None` when there is no earlier package kept.
+    pub reinstall: Option<Command>,
 }
 
 /// The result of a check.
@@ -107,6 +138,106 @@ struct Local {
     granted: BTreeSet<String>,
     /// The verified manifest of the last offer, kept until it is staged and committed.
     pending: Option<Pending>,
+    /// The update staged for a trial boot.
+    #[serde(default)]
+    staged: Option<Slot>,
+    /// The last committed update: the build to run when nothing is on trial.
+    #[serde(default)]
+    good: Option<Slot>,
+    /// Updates that failed their trial. Applied to the trust state when the updater opens, so a
+    /// launcher can roll back without it.
+    #[serde(default)]
+    bad: BTreeSet<String>,
+}
+
+/// An update's local files, relative to the state directory.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Slot {
+    update_id: String,
+    /// What to run or load from (`versions/<id>` for swaps, `updates/<id>` for assets).
+    run: Option<String>,
+    /// A kept installer package (MSI) for reinstalling after a later failed update.
+    package: Option<String>,
+    /// For installer formats: the version the installer puts in place. A start that reports
+    /// another version is the old build (the installer did not run), so it commits nothing.
+    #[serde(default)]
+    version: Option<String>,
+}
+
+fn remove_dirs(base: &Path, id: &str) -> Result<()> {
+    for d in [base.join("updates").join(id), base.join("versions").join(id)] {
+        if d.exists() {
+            fs::remove_dir_all(d)?;
+        }
+    }
+    Ok(())
+}
+
+impl Local {
+    fn load(dir: &Path) -> Result<Self> {
+        match fs::read(dir.join("local.json")) {
+            Ok(b) => serde_json::from_slice(&b).map_err(|e| Error::State(e.to_string())),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    fn save(&self, dir: &Path) -> Result<()> {
+        let json = serde_json::to_vec_pretty(self).map_err(|e| Error::State(e.to_string()))?;
+        write_atomic(&dir.join("local.json"), &json)
+    }
+
+    fn good_dir(&self, base: &Path) -> Option<PathBuf> {
+        self.good.as_ref()?.run.as_ref().map(|r| base.join(r)).filter(|d| d.exists())
+    }
+
+    fn begin_boot(&mut self, base: &Path) -> Result<Boot> {
+        Ok(match self.health.begin_boot() {
+            BootChoice::Candidate(id) => {
+                let run = self.staged.as_ref().filter(|s| s.update_id == id).and_then(|s| s.run.clone());
+                Boot { dir: run.map(|r| base.join(r)), trial: Some(id), ..Boot::default() }
+            }
+            BootChoice::RollBack(id) => {
+                self.bad.insert(id.clone());
+                remove_dirs(base, &id)?;
+                self.staged = None;
+                if self.pending.as_ref().is_some_and(|p| p.manifest.update_id == id) {
+                    self.pending = None;
+                }
+                let reinstall =
+                    self.good.as_ref().and_then(|g| g.package.as_ref()).map(|p| base.join(p)).filter(|p| p.exists()).map(|p| install::reinstall(&p));
+                Boot { dir: self.good_dir(base), rolled_back: Some(id), reinstall, ..Boot::default() }
+            }
+            BootChoice::Current => Boot { dir: self.good_dir(base), ..Boot::default() },
+        })
+    }
+
+    /// Makes the committed trial the good build and drops the previous one's files.
+    fn commit(&mut self, base: &Path, id: &str) -> Result<()> {
+        let Some(slot) = self.staged.take().filter(|s| s.update_id == id) else { return Ok(()) };
+        if slot.run.as_deref() == Some(&format!("versions/{id}")) {
+            // The archive was unpacked; the download is no longer needed.
+            let dl = base.join("updates").join(id);
+            if dl.exists() {
+                fs::remove_dir_all(dl)?;
+            }
+        }
+        if let Some(old) = self.good.replace(slot)
+            && old.update_id != id
+        {
+            remove_dirs(base, &old.update_id)?;
+        }
+        Ok(())
+    }
+}
+
+/// For launchers: starts a boot from the state directory alone (no network, no keys). Same as
+/// [`Updater::begin_boot`]; the app must not call that again in the process it starts.
+pub fn begin_boot(state_dir: &Path) -> Result<Boot> {
+    let mut local = Local::load(state_dir)?;
+    let boot = local.begin_boot(state_dir)?;
+    local.save(state_dir)?;
+    Ok(boot)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -147,16 +278,15 @@ impl<T: Transport> Updater<T> {
     pub fn open(cfg: Config, transport: T) -> Result<Self> {
         fs::create_dir_all(cfg.dir.join("updates"))?;
         fs::create_dir_all(cfg.dir.join("versions"))?;
-        let local = match fs::read(cfg.dir.join("local.json")) {
-            Ok(b) => serde_json::from_slice(&b).map_err(|e| Error::State(e.to_string()))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Local::default(),
-            Err(e) => return Err(e.into()),
-        };
-        let client = match fs::read(cfg.dir.join("trust.cbor")) {
+        let local = Local::load(&cfg.dir)?;
+        let mut client = match fs::read(cfg.dir.join("trust.cbor")) {
             Ok(b) => Some(Client::from_state(cfg.pin, ClientState::from_bytes(&b)?, Timestamp::now())?),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return Err(e.into()),
         };
+        if let Some(c) = client.as_mut() {
+            local.bad.iter().for_each(|id| c.mark_bad(id));
+        }
         Ok(Self { cfg, transport, client, local })
     }
 
@@ -164,8 +294,7 @@ impl<T: Transport> Updater<T> {
         if let Some(c) = &self.client {
             write_atomic(&self.cfg.dir.join("trust.cbor"), &c.state().to_bytes()?)?;
         }
-        let json = serde_json::to_vec_pretty(&self.local).map_err(|e| Error::State(e.to_string()))?;
-        write_atomic(&self.cfg.dir.join("local.json"), &json)
+        self.local.save(&self.cfg.dir)
     }
 
     /// The user's consent log (mode changes and per-update answers).
@@ -190,7 +319,9 @@ impl<T: Transport> Updater<T> {
         }
         if self.client.is_none() {
             let first = bundle.roots.first().ok_or_else(|| Error::Invalid("server sent no root".into()))?;
-            self.client = Some(Client::new(self.cfg.pin, first, now)?);
+            let mut c = Client::new(self.cfg.pin, first, now)?;
+            self.local.bad.iter().for_each(|id| c.mark_bad(id));
+            self.client = Some(c);
         }
         let client = self.client.as_mut().expect("client set above");
         // The chain starts at the pinned root; send only the rotations after it.
@@ -210,6 +341,14 @@ impl<T: Transport> Updater<T> {
             && &p.signing_identity != want
         {
             return Err(Error::Invalid(format!("{}: signing identity changed ({} → {})", m.update_id, want, p.signing_identity)));
+        }
+        if let (Some(p), Some(t)) = (install::full(m), &self.cfg.target)
+            && (p.platform, p.arch, p.format) != (t.platform, t.arch, t.format)
+        {
+            return Err(Error::Invalid(format!(
+                "{}: the update is a {:?} {:?} {:?} package; this build is {:?} {:?} {:?}",
+                m.update_id, p.platform, p.arch, p.format, t.platform, t.arch, t.format
+            )));
         }
         let current = match &m.kind {
             UpdateKind::Full(_) => m.version <= self.cfg.client_version,
@@ -318,7 +457,7 @@ impl<T: Transport> Updater<T> {
         fs::rename(&part, &done)?;
         if install::full(&p.manifest).is_none() {
             // Assets and Wasm load from the staged directory on the next start.
-            self.local.health.stage(update_id);
+            self.stage(Slot { update_id: update_id.into(), run: Some(format!("updates/{update_id}")), package: None, version: None });
         }
         self.save()?;
         Ok(done)
@@ -330,48 +469,97 @@ impl<T: Transport> Updater<T> {
     pub fn install_plan(&mut self, update_id: &str) -> Result<Plan> {
         let p = self.pending(update_id)?.clone();
         let full = install::full(&p.manifest).ok_or_else(|| Error::Invalid(format!("{update_id} is not a full update")))?;
-        let staged = self.cfg.dir.join("updates").join(update_id);
+        let mut staged = self.cfg.dir.join("updates").join(update_id);
+        if full.format == PackageFormat::Msi {
+            // Kept for reinstalling after a later failed update; the installer runs it from here.
+            let keep = self.cfg.dir.join("versions").join(update_id);
+            if staged.is_dir() {
+                if keep.exists() {
+                    fs::remove_dir_all(&keep)?;
+                }
+                fs::rename(&staged, &keep)?;
+            }
+            staged = keep;
+        }
         if !staged.is_dir() {
             return Err(Error::Invalid(format!("{update_id} is not downloaded")));
         }
         let plan = install::plan(&p.manifest, full, &staged, &self.cfg.dir.join("versions"))?;
         if matches!(plan, Plan::Swap { .. }) {
-            self.local.health.stage(update_id);
+            self.stage(Slot { update_id: update_id.into(), run: Some(format!("versions/{update_id}")), package: None, version: None });
             self.save()?;
         }
         Ok(plan)
     }
 
-    /// Call first on every start. Returns which build to run: the staged candidate's directory,
-    /// or `None` for the current build (after a rollback too).
-    pub fn begin_boot(&mut self) -> Result<Option<PathBuf>> {
-        let choice = self.local.health.begin_boot();
-        let out = match choice {
-            BootChoice::Candidate(id) => {
-                let v = self.cfg.dir.join("versions").join(&id);
-                Some(if v.is_dir() { v } else { self.cfg.dir.join("updates").join(id) })
+    fn stage(&mut self, slot: Slot) {
+        self.local.health.stage(&slot.update_id);
+        self.local.staged = Some(slot);
+    }
+
+    /// Call after the package-manager command from [`Updater::install_plan`] succeeded, or
+    /// right before handing an installer the app's own files (MSI: start `msiexec` detached
+    /// with [`Command::spawn`] and exit). The next start runs the new build on trial; a start
+    /// that is still the old version commits nothing and the update stays on offer. MSI
+    /// packages are kept so a later failed update can reinstall this one.
+    pub fn installed(&mut self, update_id: &str) -> Result<()> {
+        let p = self.pending(update_id)?.clone();
+        let full = install::full(&p.manifest).ok_or_else(|| Error::Invalid(format!("{update_id} is not a full update")))?;
+        if !matches!(full.format.install_mode(), InstallMode::PlatformInstaller | InstallMode::PrivilegedPackageManager) {
+            return Err(Error::Invalid(format!("{update_id} is not installed by an installer")));
+        }
+        let package = if full.format == PackageFormat::Msi {
+            let rel = format!("versions/{update_id}/{}", install::package_file(&p.manifest)?);
+            if !self.cfg.dir.join(&rel).is_file() {
+                return Err(Error::Invalid(format!("{update_id}: call install_plan first")));
             }
-            BootChoice::RollBack(id) => {
-                if let Some(c) = self.client.as_mut() {
-                    c.mark_bad(&id);
-                }
-                for dir in [self.cfg.dir.join("updates").join(&id), self.cfg.dir.join("versions").join(&id)] {
-                    if dir.exists() {
-                        fs::remove_dir_all(dir)?;
-                    }
-                }
-                self.local.pending = None;
-                None
+            Some(rel)
+        } else {
+            let staged = self.cfg.dir.join("updates").join(update_id);
+            if staged.exists() {
+                fs::remove_dir_all(&staged)?;
             }
-            BootChoice::Current => None,
+            None
         };
+        self.stage(Slot { update_id: update_id.into(), run: None, package, version: Some(p.manifest.version.to_string()) });
+        self.save()
+    }
+
+    /// Call first on every start (unless a launcher already did, see [`begin_boot`]).
+    pub fn begin_boot(&mut self) -> Result<Boot> {
+        let boot = self.local.begin_boot(&self.cfg.dir)?;
+        if let (Some(id), Some(c)) = (&boot.rolled_back, self.client.as_mut()) {
+            c.mark_bad(id);
+        }
         self.save()?;
-        Ok(out)
+        Ok(boot)
     }
 
     /// Call after the first frame and the app's own ready signal. Commits a trial update.
     pub fn mark_ready(&mut self) -> Result<Option<String>> {
+        // Another process (the launcher) may have started this boot: reload its state.
+        let fresh = Local::load(&self.cfg.dir)?;
+        self.local.health = fresh.health;
+        self.local.staged = fresh.staged;
+        self.local.good = fresh.good;
+        self.local.bad = fresh.bad;
+        if let weirdnet_update::health::HealthState::Trial { update_id, .. } = &self.local.health.state
+            && let Some(slot) = self.local.staged.as_ref().filter(|s| &s.update_id == update_id)
+            && slot.version.as_ref().is_some_and(|v| *v != self.cfg.client_version.to_string())
+        {
+            // The installer never replaced this build: back to the previous good state.
+            self.local.health.state = match &self.local.good {
+                Some(g) => weirdnet_update::health::HealthState::Committed { update_id: g.update_id.clone() },
+                None => weirdnet_update::health::HealthState::Idle,
+            };
+            self.local.staged = None;
+            self.save()?;
+            return Ok(None);
+        }
         let committed = self.local.health.mark_ready();
+        if let Some(id) = &committed {
+            self.local.commit(&self.cfg.dir, id)?;
+        }
         // Only a just-committed trial consumes the pending offer; an offer still waiting for
         // consent survives restarts.
         if let Some(id) = &committed

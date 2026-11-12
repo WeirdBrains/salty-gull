@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/salty-core", "crates/salty-server", "crates/saltyctl", "crates/salty-client"]
+members = ["crates/salty-core", "crates/salty-server", "crates/saltyctl", "crates/salty-client", "crates/salty-launch", "crates/salty-demo"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.0.0"
 edition = "2024"
 rust-version = "1.99"
 authors = ["Michael Christenson II <m3talsmith@gmail.com>"]
@@ -12,9 +12,10 @@ repository = "https://github.com/WeirdBrains/salty-gull"
 publish = false
 
 [workspace.dependencies]
-salty-core = { path = "crates/salty-core" }
-salty-client = { path = "crates/salty-client" }
+salty-core = { path = "crates/salty-core", version = "0.0.0", default-features = false }
+salty-client = { path = "crates/salty-client", version = "0.0.0" }
 saltyctl = { path = "crates/saltyctl" }
+salty-launch = { path = "crates/salty-launch" }
 weirdnet-update = "0.1"
 weirdnet-accounts = "0.1"
 serde = { version = "1", features = ["derive"] }

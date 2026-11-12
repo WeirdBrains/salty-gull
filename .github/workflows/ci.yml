@@ -16,3 +16,18 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace --all-features
+  device-e2e:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build
+        run: |
+          set -eu
+          mkdir -p bin
+          cargo build --locked --release -p saltyctl -p salty-server -p salty-launch
+          cp target/release/saltyctl target/release/salty-server target/release/salty-launch bin/
+          for v in 1.0.0 1.1.0 1.3.0; do SALTY_DEMO_VERSION=$v cargo build --locked --release -p salty-demo; cp target/release/salty-demo bin/salty-demo-$v; done
+          SALTY_DEMO_VERSION=1.2.0 SALTY_DEMO_BROKEN=1 cargo build --locked --release -p salty-demo
+          cp target/release/salty-demo bin/salty-demo-1.2.0-broken
+      - run: sh scripts/device-e2e.sh bin

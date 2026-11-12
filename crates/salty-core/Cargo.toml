@@ -1,13 +1,15 @@
 [package]
 name = "salty-core"
 description = "Salty Gull service core: apps, channels, verified roots and manifests, content-addressed blobs (SQLite)."
+keywords = ["update", "ota", "updater", "signing"]
+categories = ["os"]
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+publish = true
 
 [dependencies]
 weirdnet-update.workspace = true
@@ -15,14 +17,17 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 hex.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, optional = true }
 semver = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
 semver.workspace = true
-salty-core = { path = ".", features = ["testkit"] }
+salty-core = { path = ".", features = ["store", "testkit"] }
 
 [features]
+default = ["store"]
+# The server's SQLite store. Devices use only the wire format and errors.
+store = ["dep:rusqlite"]
 # Fixtures (keys, roots, manifests) for this workspace's tests.
 testkit = ["dep:semver"]

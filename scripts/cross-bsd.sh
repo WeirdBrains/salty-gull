@@ -36,7 +36,7 @@ freebsd() {
   rustup target add x86_64-unknown-freebsd
   CC_x86_64_unknown_freebsd=$root/fbsd-cc AR_x86_64_unknown_freebsd=llvm-ar \
   CARGO_TARGET_X86_64_UNKNOWN_FREEBSD_LINKER=$root/fbsd-cc \
-    cargo build --locked --release --target x86_64-unknown-freebsd -p saltyctl -p salty-server -p salty-client
+    cargo build --locked --release --target x86_64-unknown-freebsd -p saltyctl -p salty-server -p salty-client -p salty-launch
 }
 
 openbsd() {
@@ -55,7 +55,7 @@ openbsd() {
   CC_x86_64_unknown_openbsd=$root/obsd-cc AR_x86_64_unknown_openbsd=llvm-ar \
   CARGO_TARGET_X86_64_UNKNOWN_OPENBSD_LINKER=$root/obsd-cc \
     cargo +nightly build --locked -Zbuild-std=std,panic_abort --release --target x86_64-unknown-openbsd \
-      -p saltyctl -p salty-server -p salty-client
+      -p saltyctl -p salty-server -p salty-client -p salty-launch
 }
 
 case $which in freebsd) freebsd;; openbsd) openbsd;; all) freebsd; openbsd;; *) echo "unknown: $which" >&2; exit 2;; esac

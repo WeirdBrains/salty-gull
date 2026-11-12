@@ -15,6 +15,7 @@
 #![forbid(unsafe_code)]
 
 mod error;
+#[cfg(feature = "store")]
 mod store;
 pub mod wire;
 
@@ -22,7 +23,8 @@ pub mod wire;
 pub mod testkit;
 
 pub use error::{Error, Result};
+#[cfg(feature = "store")]
 pub use store::{Published, Store};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "store"))]
 mod tests;

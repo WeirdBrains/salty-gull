@@ -1,6 +1,8 @@
 # Morph integration (prep)
 
-Status: plan only. Nothing here changes Morph's repo; that needs Michael's go-ahead. Morph's side is
+Status: **on hold** (Michael, 2026-11-12). Nothing here changes Morph's repo. Decided 2026-11-12:
+`salty-client` is on crates.io (Morph depends on the published crate), and portable builds use
+`salty-launch` from this repo. Morph's side is
 `ARCHITECTURE.md` section 9a in `WeirdBrains/morph`: signed full updates for desktop and sideloaded builds,
 never forced, opt-in per update or for all updates, F-Droid off until the user opts in, store builds take
 no full updates.
@@ -36,9 +38,10 @@ only show the command, for example `yay -Syu morph`; Morph never downloads them.
 
 ## Installs per format
 
-- **tar.gz / zip / `.app` (swap):** unpacked into `versions/<id>`; a small `morph` launcher starts the
-  newest healthy version and falls back after two failed boots. Needs a launcher in Morph's packaging.
-- **exe / msi:** per-user install through `msiexec` (no admin); **dmg:** opened for the user.
+- **tar.gz / zip / AppImage / `.app` (swap):** unpacked into `versions/<id>`; `salty-launch` (renamed to
+  `morph`) starts the build on trial or the last good one and rolls back after two failed starts.
+- **msi:** per-user install through `msiexec` (no admin), handed off detached before Morph exits;
+  `salty-launch` reinstalls the kept previous MSI after a failed update. **dmg:** opened for the user.
 - **deb / rpm:** `pkexec apt-get install` / `pkexec dnf install`, so the system asks for the password.
 - **FreeBSD / OpenBSD:** `doas pkg add` / `doas pkg_add`.
 
@@ -50,8 +53,7 @@ only show the command, for example `yay -Syu morph`; Morph never downloads them.
 
 ## Open decisions
 
-1. How Morph depends on `salty-client`: a pinned git rev of `WeirdBrains/salty-gull` (nothing published),
-   or publishing `salty-client` to crates.io (a Salty Gull release, so it needs a yes).
-2. Whether Morph ships the swap launcher (portable tar.gz/AppImage) or only package-manager formats.
+1. ~~How Morph depends on `salty-client`~~: the published crate (2026-11-12).
+2. ~~Whether Morph ships the swap launcher~~: yes, `salty-launch` for portable builds (2026-11-12).
 3. The update server's host name and where it runs (no infrastructure is bought or deployed).
 4. Updates over Weirdnet relays (section 9a) are later; HTTPS is the first transport.

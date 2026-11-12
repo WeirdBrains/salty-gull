@@ -113,6 +113,7 @@ impl World {
             policy: Policy { flavor: Flavor::Desktop, dart_patches: false },
             signing_identity: Some(IDENTITY.into()),
             minisign_key: Some(self.minisign_pk.clone()),
+            target: None,
         }
     }
     fn updater(&self) -> Updater<Mem> {
@@ -150,9 +151,13 @@ fn ask_accept_download_swap_boot_commit() {
     }
     // Next start: state survives a reopen.
     let mut u = w.updater();
-    assert_eq!(u.begin_boot().unwrap(), Some(dir));
+    let b = u.begin_boot().unwrap();
+    assert_eq!((b.dir.as_ref(), b.trial.as_deref()), (Some(&dir), Some(ID)));
     assert_eq!(u.mark_ready().unwrap().as_deref(), Some(ID));
     assert_eq!(u.check(&device(), NOW).unwrap(), Check::UpToDate);
+    // Later starts keep running the committed build; the download is gone.
+    assert_eq!(u.begin_boot().unwrap(), Boot { dir: Some(dir), ..Boot::default() });
+    assert!(!w.device_dir.path().join("updates").join(ID).exists());
 }
 
 #[test]
@@ -184,7 +189,7 @@ fn tampered_blob_is_not_staged() {
     u.check(&device(), NOW).unwrap();
     assert!(u.download(ID).is_err());
     assert!(!w.device_dir.path().join("updates").join(ID).exists());
-    assert_eq!(u.begin_boot().unwrap(), None);
+    assert_eq!(u.begin_boot().unwrap(), Boot::default());
 }
 
 #[test]
@@ -215,9 +220,10 @@ fn two_failed_boots_roll_back_and_the_update_is_refused() {
     u.check(&device(), NOW).unwrap();
     u.download(ID).unwrap();
     let Plan::Swap { dir } = u.install_plan(ID).unwrap() else { panic!() };
-    assert_eq!(u.begin_boot().unwrap(), Some(dir.clone()));
-    assert!(u.begin_boot().unwrap().is_some(), "second trial");
-    assert_eq!(u.begin_boot().unwrap(), None, "rolled back");
+    assert_eq!(u.begin_boot().unwrap().dir, Some(dir.clone()));
+    assert!(u.begin_boot().unwrap().dir.is_some(), "second trial");
+    let b = u.begin_boot().unwrap();
+    assert_eq!((b.dir, b.rolled_back.as_deref(), b.reinstall), (None, Some(ID), None), "rolled back");
     assert!(!dir.exists());
     assert!(!w.device_dir.path().join("updates").join(ID).exists());
     assert!(matches!(u.check(&device(), NOW), Err(Error::Update(weirdnet_update::Error::KnownBad(_)))));
@@ -243,7 +249,24 @@ fn deb_and_msi_go_through_the_system_prompt_or_installer() {
     assert_eq!(cmd.program, "pkexec");
     assert_eq!(&cmd.args[..3], ["apt-get", "install", "--yes"]);
     assert!(cmd.args[3].ends_with("updates/morph-stable-1/morph.pkg"));
-    assert_eq!(u.begin_boot().unwrap(), None, "the package manager replaces the app; nothing to trial-boot here");
+    assert_eq!(u.begin_boot().unwrap(), Boot::default(), "nothing on trial until the install ran");
+    // The app runs `cmd` here, after the user confirms.
+    u.installed(ID).unwrap();
+    assert!(!w.device_dir.path().join("updates").join(ID).exists());
+    // A start that is still 1.0.0 (the installer never ran) commits nothing; the offer stays.
+    let b = u.begin_boot().unwrap();
+    assert_eq!((b.dir, b.trial.as_deref()), (None, Some(ID)), "the installed build runs on trial");
+    assert_eq!(u.mark_ready().unwrap(), None);
+    assert!(matches!(u.check(&device(), NOW).unwrap(), Check::Offer { .. }));
+    u.download(ID).unwrap();
+    u.install_plan(ID).unwrap();
+    u.installed(ID).unwrap();
+    // The new 1.1.0 build starts on trial and commits.
+    let mut cfg = w.cfg();
+    cfg.client_version = Version::new(1, 1, 0);
+    let mut u = Updater::open(cfg, w.mem()).unwrap();
+    assert_eq!(u.begin_boot().unwrap().trial.as_deref(), Some(ID));
+    assert_eq!(u.mark_ready().unwrap().as_deref(), Some(ID));
 
     let w = world_with(PackageFormat::Msi, b"msi", None);
     let mut u = w.auto();
@@ -252,6 +275,10 @@ fn deb_and_msi_go_through_the_system_prompt_or_installer() {
     let Plan::PlatformInstaller(cmd) = u.install_plan(ID).unwrap() else { panic!() };
     assert_eq!(cmd.program, "msiexec");
     assert!(cmd.args.contains(&"MSIINSTALLPERUSER=1".to_owned()));
+    // The installer runs the kept copy, which must still be there after `installed`.
+    assert!(cmd.args[1].replace('\\', "/").ends_with("versions/morph-stable-1/morph.pkg"), "{cmd:?}");
+    u.installed(ID).unwrap();
+    assert!(std::path::Path::new(&cmd.args[1]).is_file());
 }
 
 #[test]
@@ -311,4 +338,91 @@ fn manifest_paths_cannot_escape_the_update_dir() {
     assert!(safe_join(Path::new("/x"), "../etc/passwd").is_err());
     assert!(safe_join(Path::new("/x"), "/etc/passwd").is_err());
     assert!(safe_join(Path::new("/x"), "bin/morph").is_ok());
+}
+
+/// Publishes `seq` as an MSI with its own minisig, for the rollback test.
+fn publish_msi(w: &World, kp: &minisign::KeyPair, seq: u64, version: &str) {
+    let pkg = format!("msi {version}").into_bytes();
+    publish(&w.store, seq, version, PackageFormat::Msi, &[("morph.msi", &pkg), ("morph.msi.minisig", &minisig(kp, &pkg))]);
+}
+
+#[test]
+fn failed_msi_update_reinstalls_the_kept_previous_msi() {
+    let w = world_with(PackageFormat::Msi, b"unused", None);
+    let kp = minisign_pair();
+    let mut cfg = w.cfg();
+    cfg.minisign_key = Some(kp.pk.to_base64());
+    Updater::open(cfg.clone(), w.mem()).unwrap().set_mode(ConsentMode::Auto, NOW).unwrap();
+    let at = |v: &str| {
+        let mut c = cfg.clone();
+        c.client_version = Version::parse(v).unwrap();
+        Updater::open(c, w.mem()).unwrap()
+    };
+    for (seq, from, to) in [(2, "1.0.0", "1.1.0"), (3, "1.1.0", "1.2.0")] {
+        publish_msi(&w, &kp, seq, to);
+        let id = format!("morph-stable-{seq}");
+        let mut u = at(from);
+        u.check(&device(), NOW).unwrap();
+        u.download(&id).unwrap();
+        let Plan::PlatformInstaller(_) = u.install_plan(&id).unwrap() else { panic!() };
+        u.installed(&id).unwrap();
+        // The installer replaced the app; the new version starts.
+        let mut u = at(to);
+        assert_eq!(u.begin_boot().unwrap().trial.as_deref(), Some(id.as_str()));
+        if seq == 2 {
+            assert_eq!(u.mark_ready().unwrap(), Some(id));
+        }
+    }
+    let mut u = at("1.2.0");
+    // 1.2.0 fails its second start too: roll back and reinstall the kept 1.1.0 MSI.
+    assert!(u.begin_boot().unwrap().trial.is_some());
+    let b = u.begin_boot().unwrap();
+    assert_eq!(b.rolled_back.as_deref(), Some("morph-stable-3"));
+    let cmd = b.reinstall.expect("1.1.0 kept");
+    assert_eq!(cmd.program, "msiexec");
+    assert!(cmd.args[1].replace('\\', "/").ends_with("versions/morph-stable-2/morph.msi"), "{cmd:?}");
+    assert!(!w.device_dir.path().join("versions/morph-stable-3").exists());
+    let mut again = Updater::open(cfg, w.mem()).unwrap();
+    assert!(matches!(again.check(&device(), NOW), Err(Error::Update(weirdnet_update::Error::KnownBad(_)))));
+}
+
+#[test]
+fn launcher_boot_and_app_ready_share_the_state_dir() {
+    let w = world();
+    let mut u = w.auto();
+    u.check(&device(), NOW).unwrap();
+    u.download(ID).unwrap();
+    let Plan::Swap { dir } = u.install_plan(ID).unwrap() else { panic!() };
+    // The launcher process.
+    let b = begin_boot(w.device_dir.path()).unwrap();
+    assert_eq!((b.dir.as_ref(), b.trial.as_deref()), (Some(&dir), Some(ID)));
+    // The app it started: ready without calling begin_boot itself.
+    let mut app = w.updater();
+    assert_eq!(app.mark_ready().unwrap().as_deref(), Some(ID));
+    assert_eq!(begin_boot(w.device_dir.path()).unwrap().dir, Some(dir));
+}
+
+#[test]
+fn launcher_rollback_marks_the_update_bad_for_the_app() {
+    let w = world();
+    let mut u = w.auto();
+    u.check(&device(), NOW).unwrap();
+    u.download(ID).unwrap();
+    u.install_plan(ID).unwrap();
+    for _ in 0..2 {
+        assert!(begin_boot(w.device_dir.path()).unwrap().trial.is_some());
+    }
+    assert_eq!(begin_boot(w.device_dir.path()).unwrap().rolled_back.as_deref(), Some(ID));
+    assert!(matches!(w.updater().check(&device(), NOW), Err(Error::Update(weirdnet_update::Error::KnownBad(_)))));
+}
+
+#[test]
+fn updates_for_another_target_are_refused() {
+    let w = world();
+    let mut cfg = w.cfg();
+    cfg.target = Some(Target { platform: Platform::Windows, arch: weirdnet_update::manifest::Arch::X86_64, format: PackageFormat::Msi });
+    let e = Updater::open(cfg.clone(), w.mem()).unwrap().check(&device(), NOW).unwrap_err().to_string();
+    assert!(e.contains("this build is Windows"), "{e}");
+    cfg.target = Some(Target { platform: Platform::Linux, arch: weirdnet_update::manifest::Arch::X86_64, format: PackageFormat::TarGz });
+    assert!(matches!(Updater::open(cfg, w.mem()).unwrap().check(&device(), NOW).unwrap(), Check::Offer { .. }));
 }

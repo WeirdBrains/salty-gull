@@ -45,6 +45,22 @@ impl Command {
         let st = std::process::Command::new(&self.program).args(&self.args).status()?;
         if st.success() { Ok(()) } else { Err(Error::Invalid(format!("{} exited with {st}", self.program))) }
     }
+
+    /// Starts it without waiting, detached from this process (Windows: no console), so the app
+    /// can exit and let an installer replace its files. Call only after the user confirmed.
+    pub fn spawn(&self) -> Result<()> {
+        let mut c = std::process::Command::new(&self.program);
+        c.args(&self.args).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const DETACHED_PROCESS: u32 = 0x0000_0008;
+            const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+            c.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+        }
+        c.spawn()?;
+        Ok(())
+    }
 }
 
 /// The full-package description, if the update is one.
@@ -91,7 +107,7 @@ pub fn verify_minisign(staged: &Path, package: &str, public_key: &str) -> Result
 /// Builds the plan for a staged package. Swap formats are unpacked into `versions/<id>`.
 pub fn plan(m: &UpdateManifest, p: &FullPackage, staged: &Path, versions: &Path) -> Result<Plan> {
     let package = staged.join(package_file(m)?);
-    let file = package.to_string_lossy().into_owned();
+    let file = native(&package);
     match p.format.install_mode() {
         InstallMode::NotifyOnly => Err(Error::Invalid("notify-only formats are never installed by the app".into())),
         InstallMode::Swap => {
@@ -119,7 +135,7 @@ pub fn plan(m: &UpdateManifest, p: &FullPackage, staged: &Path, versions: &Path)
         }
         InstallMode::PlatformInstaller => Ok(Plan::PlatformInstaller(match p.format {
             // Per-user MSI: no elevation; msiexec shows its own UI.
-            PackageFormat::Msi => Command::new("msiexec", &["/i", &file, "MSIINSTALLPERUSER=1", "ALLUSERS=2"]),
+            PackageFormat::Msi => Command::new("msiexec", &["/i", &file, "MSIINSTALLPERUSER=1", "ALLUSERS=2", "/norestart"]),
             PackageFormat::Dmg => Command::new("open", &[&file]),
             _ => return Err(Error::Invalid(format!("{:?} installs through the mobile platform, not salty-client", p.format))),
         })),
@@ -127,10 +143,24 @@ pub fn plan(m: &UpdateManifest, p: &FullPackage, staged: &Path, versions: &Path)
             (PackageFormat::Deb, Platform::Linux) => Command::new("pkexec", &["apt-get", "install", "--yes", &file]),
             (PackageFormat::Rpm, Platform::Linux) => Command::new("pkexec", &["dnf", "install", "--assumeyes", &file]),
             (PackageFormat::BsdPkg, Platform::Freebsd | Platform::Ghostbsd | Platform::Dragonfly) => Command::new("doas", &["pkg", "add", &file]),
-            (PackageFormat::BsdPkg, Platform::Openbsd) => Command::new("doas", &["pkg_add", &file]),
+            // OpenBSD wants signify-signed packages from its own mirrors; this one is already
+            // verified (signed manifest, BLAKE3 and the publisher's minisign key).
+            (PackageFormat::BsdPkg, Platform::Openbsd) => Command::new("doas", &["pkg_add", "-D", "unsigned", &file]),
             (f, os) => return Err(Error::Invalid(format!("{f:?} packages are not installed on {}", os.as_str()))),
         })),
     }
+}
+
+/// Reinstalls a kept MSI after a failed update (the package allows downgrades).
+pub(crate) fn reinstall(package: &Path) -> Command {
+    Command::new("msiexec", &["/i", &native(package), "MSIINSTALLPERUSER=1", "ALLUSERS=2", "/norestart"])
+}
+
+/// A path for another program's command line. Windows Installer rejects `/` separators
+/// (error 2203), which a state directory from a config file may contain.
+fn native(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    if cfg!(windows) { s.replace('/', "\\") } else { s.into_owned() }
 }
 
 fn make_executable(path: &Path) -> Result<()> {

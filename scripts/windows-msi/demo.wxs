@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*" Name="Salty Demo" Language="1033" Version="@VERSION@" Manufacturer="Weird Brains" UpgradeCode="5b3c7a3e-6f1e-4c55-9d5c-2a7f6c1b9e01">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser" Platform="x64"/>
+    <Media Id="1" Cabinet="demo.cab" EmbedCab="yes"/>
+    <MajorUpgrade AllowDowngrades="yes"/>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsDir" Name="Programs">
+          <Directory Id="INSTALLDIR" Name="SaltyDemo">
+            <Component Id="Launcher" Guid="2f0a6c1e-6a7b-4c39-8e51-1d3b5a9c7e10" Win64="yes">
+              <RegistryValue Root="HKCU" Key="Software\WeirdBrains\SaltyDemo" Name="launcher" Type="integer" Value="1" KeyPath="yes"/>
+              <File Id="SaltyDemoExe" Name="SaltyDemo.exe" Source="build/SaltyDemo.exe"/>
+              <File Id="LaunchJson" Name="salty-launch.json" Source="build/salty-launch.json"/>
+              <RemoveFolder Id="RmInstall" On="uninstall"/>
+            </Component>
+            <Directory Id="APPDIR" Name="app">
+              <Component Id="App" Guid="7c4e2b9a-3d1f-4e6a-9b20-5f8a1c3d6e21" Win64="yes">
+                <RegistryValue Root="HKCU" Key="Software\WeirdBrains\SaltyDemo" Name="app" Type="integer" Value="1" KeyPath="yes"/>
+                <File Id="DemoExe" Name="salty-demo.exe" Source="build/app/salty-demo.exe"/>
+                <File Id="DemoJson" Name="salty-demo.json" Source="build/app/salty-demo.json"/>
+                <RemoveFolder Id="RmApp" On="uninstall"/>
+              </Component>
+            </Directory>
+          </Directory>
+        </Directory>
+      </Directory>
+    </Directory>
+    <Feature Id="Main" Level="1"><ComponentRef Id="Launcher"/><ComponentRef Id="App"/></Feature>
+  </Product>
+</Wix>

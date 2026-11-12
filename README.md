@@ -4,17 +4,19 @@ Over-the-air updates for Flutter and desktop apps, from WeirdBrains. Salty Gull 
 WeirdBrains apps (Morph first). Updates are signed by the publishing org, verified on the device, and never
 installed without the user's consent.
 
-This is the G3 MVP in progress: a single-org self-hosted server, the publisher CLI and the desktop
-updater library. Generic update logic (roots, manifests, verification, anti-rollback, targeting, rollouts,
+This is the G3 MVP in progress: a single-org self-hosted server, the publisher CLI, the desktop updater
+library and a launcher for portable builds. `salty-core` and `salty-client` are on crates.io. Generic update logic (roots, manifests, verification, anti-rollback, targeting, rollouts,
 consent, boot health) lives in [`weirdnet-update`](https://github.com/WeirdBrains/weirdnet-update); only Salty
 Gull-specific code is here.
 
 | Crate | What |
 |---|---|
-| `salty-core` | Store: verified roots and manifests (SQLite), BLAKE3-addressed blobs, device bundles |
+| `salty-core` | Wire format and errors; with the default `store` feature, the server's store: verified roots and manifests (SQLite), BLAKE3-addressed blobs, device bundles |
 | `salty-server` | HTTP server (axum): public reads, admin-token publishing, read-only MCP at `/mcp` |
 | `saltyctl` | Keys, roots, root pins, manifests, publishing, `saltyctl mcp` (stdio bridge) |
-| `salty-client` | Device updater: check, verify, consent, download, install, trial boot, rollback |
+| `salty-client` | Device updater: check, verify, consent, download, install, trial boot, rollback (no SQLite) |
+| `salty-launch` | Launcher for portable builds (tar.gz, zip, AppImage, exe) and MSI installs: runs the build on trial or the last good one, rolls back, reinstalls the previous MSI |
+| `salty-demo` | Stand-in app for the real-machine tests (not published) |
 
 ## Try it (temp dirs)
 
@@ -63,22 +65,46 @@ root and release keys never leave the publisher.
 Salty Gull never raises privileges itself. When an app sets a minisign publisher key, every package needs a
 `.minisig` from that key, and the manifest's signing identity must match the running build.
 
+Installer formats hand off: the app calls `install_plan`, runs the command after the user confirms, and
+calls `installed`. On Windows the app records `installed`, starts `msiexec` detached (`Command::spawn`) and
+exits, because the installer replaces its files. The next start runs on trial; a start that still reports
+the old version commits nothing and the update stays on offer. Each committed MSI is kept so a later failed
+update can reinstall it (the MSI must allow downgrades, for example WiX `MajorUpgrade AllowDowngrades`).
+OpenBSD packages are added with `pkg_add -D unsigned`: Salty Gull has already checked the signed manifest,
+the BLAKE3 hash and the publisher's minisign key.
+
+## Launcher
+
+Portable builds ship `salty-launch` (renamed to the app's name) next to `salty-launch.json`:
+
+```json
+{"app_dir": "app", "entry": "bin/morph", "state_dir": "state", "reinstall_args": []}
+```
+
+Each start it picks the update on trial, the last committed update (`state/versions/<id>`) or `app_dir`,
+and runs `entry` there with `SALTY_GULL_LAUNCHED=1`, `SALTY_GULL_STATE_DIR`, `SALTY_GULL_BUILD_DIR` and
+`SALTY_GULL_TRIAL`. The app calls `mark_ready` once healthy and never `begin_boot` itself. Two starts that
+never reach ready roll back; a trial build without its entry rolls back at once. Without `entry`, a build
+with exactly one file (AppImage, exe) runs that file. `state_dir` may use `${VAR}`. With an MSI install the
+launcher starts the reinstall of the previous MSI after a rollback and exits.
+
 ## MCP
 
 `saltyctl mcp --server URL` (token in `SALTY_TOKEN`) bridges stdio to the server's `/mcp`. Tools:
 `list_channels`, `channel_history`, `root_info`. They are read-only, because agents never hold signing keys.
 
-## BSD builds
+## BSD builds and real-machine tests
 
 `scripts/cross-bsd.sh SYSROOT_DIR [freebsd|openbsd|all]` cross-builds from Linux with clang and lld against
 checksum-verified FreeBSD 14.5 and OpenBSD 8.0 sysroots. OpenBSD is a tier-3 Rust target, so it uses nightly
-with `-Zbuild-std`. The binaries are built but not yet run on real BSD machines.
+with `-Zbuild-std`. `scripts/device-e2e.sh BIN_DIR` runs the whole update loop on a real machine (Linux,
+FreeBSD, OpenBSD) and `scripts/windows-msi/` the per-user MSI test. Results: [docs/real-machine-tests.md](docs/real-machine-tests.md).
 
 ## Status
 
-Done: the verified store, server, CLI, desktop updater with platform installers, minisign checks, MCP and
-BSD cross-builds, with end-to-end tests. Next: the Flutter plugin, headless GUI tests, Morph integration
-(see [docs/morph.md](docs/morph.md)) and running the BSD builds on real machines.
+Done: the verified store, server, CLI, desktop updater with platform installers, minisign checks, MCP, the
+portable launcher, and real-machine runs on FreeBSD 14.5, OpenBSD 8.0 and Windows (per-user MSI). Next: the
+Flutter plugin and headless GUI tests. Morph integration is on hold (see [docs/morph.md](docs/morph.md)).
 
 ## Licence
 

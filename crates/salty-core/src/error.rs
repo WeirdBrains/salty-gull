@@ -2,6 +2,7 @@
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Database failure.
+    #[cfg(feature = "store")]
     #[error("database error: {0}")]
     Db(#[from] rusqlite::Error),
     /// Filesystem failure.
