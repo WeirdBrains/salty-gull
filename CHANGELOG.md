@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Format: [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- OpenBSD cross-builds are pinned to `nightly-2026-11-12`, which has the upstream `current_exe` fix
+  (rust-lang/rust#163393); `salty-launch` drops its OpenBSD `argv[0]` workaround.
+
 ## [0.1.0] - 2026-11-12
 
 ### Added

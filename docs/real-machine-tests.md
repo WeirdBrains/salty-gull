@@ -22,9 +22,11 @@ The VMs use a test-only doas rule (`permit nopass salty as root cmd pkg`, or `pk
 OpenBSD) in place of a person typing their password at the doas prompt. FreeBSD's `doas` package installs a
 sample `doas.conf` with `permit nopass :wheel`; the test replaced it.
 
-Found and fixed: on OpenBSD, `std::env::current_exe` panics on current Rust nightlies (it divides the
-`KERN_PROC_ARGV` buffer, which also holds the strings, by the pointer size); `salty_launch::self_path`
-resolves `argv[0]` there instead. OpenBSD packages need `pkg_add -D unsigned` (verified by Salty Gull).
+Found: on OpenBSD, `std::env::current_exe` panicked on Rust 1.99 to 1.100 and nightlies before 2026-11-04
+(it divided the `KERN_PROC_ARGV` buffer, which also holds the strings, by the pointer size). Rust fixed
+it in rust-lang/rust#163393 (`getexecpath(3)`), so OpenBSD builds are pinned to `nightly-2026-11-12`
+(1.102.0-nightly 3ef0c22cd) in `scripts/cross-bsd.sh` and the launcher's `argv[0]` workaround is gone.
+Rerun 2026-11-12 with that nightly: OpenBSD and FreeBSD all ok. OpenBSD packages need `pkg_add -D unsigned` (verified by Salty Gull).
 
 ## Windows: per-user MSI (`scripts/windows-msi/test.ps1`)
 

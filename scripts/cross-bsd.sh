@@ -1,12 +1,15 @@
 #!/bin/bash
 # Cross-build saltyctl, salty-server and salty-client for FreeBSD and OpenBSD from Linux.
-# Needs clang, ld.lld, llvm-ar, rustup (stable + nightly with rust-src for OpenBSD, a tier-3 target).
+# Needs clang, ld.lld, llvm-ar, rustup (stable, plus the pinned nightly below with rust-src for OpenBSD,
+# a tier-3 target): rustup toolchain install nightly-2026-11-12 --profile minimal -c rust-src
 # Usage: scripts/cross-bsd.sh SYSROOT_DIR [freebsd|openbsd|all]
 # Sysroots are fetched from the official mirrors and checked against the release checksums.
 # Run cargo with CARGO_TARGET_DIR outside the repo.
 set -euo pipefail
 root=$(realpath -m "${1:?usage: cross-bsd.sh SYSROOT_DIR [freebsd|openbsd|all]}"); which=${2:-all}
 FREEBSD=14.5; OPENBSD=8.0
+# Nightlies before 2026-11-04 panic in std::env::current_exe on OpenBSD (fixed by rust-lang/rust#163393).
+OPENBSD_NIGHTLY=${OPENBSD_NIGHTLY:-nightly-2026-11-12}
 mkdir -p "$root"
 
 wrapper() { # name clang-target sysroot
@@ -54,7 +57,7 @@ openbsd() {
   wrapper obsd-cc x86_64-unknown-openbsd "$s"
   CC_x86_64_unknown_openbsd=$root/obsd-cc AR_x86_64_unknown_openbsd=llvm-ar \
   CARGO_TARGET_X86_64_UNKNOWN_OPENBSD_LINKER=$root/obsd-cc \
-    cargo +nightly build --locked -Zbuild-std=std,panic_abort --release --target x86_64-unknown-openbsd \
+    cargo "+$OPENBSD_NIGHTLY" build --locked -Zbuild-std=std,panic_abort --release --target x86_64-unknown-openbsd \
       -p saltyctl -p salty-server -p salty-client -p salty-launch
 }
 

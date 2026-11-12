@@ -96,8 +96,8 @@ launcher starts the reinstall of the previous MSI after a rollback and exits.
 ## BSD builds and real-machine tests
 
 `scripts/cross-bsd.sh SYSROOT_DIR [freebsd|openbsd|all]` cross-builds from Linux with clang and lld against
-checksum-verified FreeBSD 14.5 and OpenBSD 8.0 sysroots. OpenBSD is a tier-3 Rust target, so it uses nightly
-with `-Zbuild-std`. `scripts/device-e2e.sh BIN_DIR` runs the whole update loop on a real machine (Linux,
+checksum-verified FreeBSD 14.5 and OpenBSD 8.0 sysroots. OpenBSD is a tier-3 Rust target, so it uses a pinned
+nightly (`nightly-2026-11-12` or later) with `-Zbuild-std`. `scripts/device-e2e.sh BIN_DIR` runs the whole update loop on a real machine (Linux,
 FreeBSD, OpenBSD) and `scripts/windows-msi/` the per-user MSI test. Results: [docs/real-machine-tests.md](docs/real-machine-tests.md).
 
 ## Status

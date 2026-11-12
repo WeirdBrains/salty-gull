@@ -153,22 +153,8 @@ pub fn prepare(base: &Path, cfg: &Config) -> Result<Action, Error> {
     Err(err("the update on trial has no program to run and did not roll back"))
 }
 
-/// This program's path. On OpenBSD, `std::env::current_exe` panics on current Rust nightlies
-/// (it divides the `KERN_PROC_ARGV` buffer, which also holds the strings, by the pointer
-/// size), so the path comes from `argv[0]` and `PATH` there.
+/// This program's real path (symlinks resolved), so the config is found next to the binary.
 pub fn self_path() -> std::io::Result<PathBuf> {
-    if cfg!(target_os = "openbsd") {
-        let argv0 = PathBuf::from(std::env::args_os().next().ok_or_else(|| std::io::Error::other("no argv[0]"))?);
-        if argv0.components().count() > 1 {
-            return argv0.canonicalize();
-        }
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        return std::env::split_paths(&path)
-            .map(|d| d.join(&argv0))
-            .find(|p| p.is_file())
-            .ok_or_else(|| std::io::Error::other(format!("{} not found in PATH", argv0.display())))?
-            .canonicalize();
-    }
     std::env::current_exe()?.canonicalize()
 }
 
